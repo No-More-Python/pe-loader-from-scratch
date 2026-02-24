@@ -33,7 +33,11 @@ int main(int argc,char **argv){
     IMAGE_DOS_HEADER dos;
 
     if(fread(&dos, sizeof(dos), 1, f) != 1){
-        printf("Read Error OR %s is not PE file\n",argv[1]);
+        if(feof(f)){
+            printf("File too small to be a PE file\n");
+        }else{
+            printf("Read error\n");
+        }
         fclose(f);
         return 1;
     }
@@ -98,7 +102,7 @@ int main(int argc,char **argv){
 
 
     uint32_t sectionOffset = dos.e_lfanew + 4 + sizeof(IMAGE_FILE_HEADER) + fileHeader.SizeOfOptionalHeader;
-    printf("Section table offset :0x%X\n",sectionOffset);
+    printf("Section table offset :0x%X\n",(unsigned int)sectionOffset);
     if(fseek(f, sectionOffset, SEEK_SET) != 0){
         printf("Seek section table offset failed\n");
         fclose(f);
