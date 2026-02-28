@@ -1,5 +1,8 @@
 #include <stdio.h>
 #include <stdint.h>
+#include <stdlib.h>
+
+void failToReadOrSeek(FILE *f);
 
 #pragma pack(push, 1)
 // 64 Bytes
@@ -19,6 +22,80 @@ typedef struct{
     uint16_t SizeOfOptionalHeader;
     uint16_t Characteristics;
 } IMAGE_FILE_HEADER;
+
+typedef struct{
+  uint32_t VirtualAddress;
+  uint32_t Size;
+} IMAGE_DATA_DIRECTORY;
+
+// 224 Bytes
+typedef struct{
+    uint16_t Magic;
+    uint8_t MajorLinkerVersion;
+    uint8_t MinorLinkerVersion;
+    uint32_t SizeOfCode;
+    uint32_t SizeOfInitializedData;
+    uint32_t SizeOfUninitializedData;
+    uint32_t AddressOfEntryPoint;
+    uint32_t BaseOfCode;
+    uint32_t BaseOfData;
+    uint32_t ImageBase;
+    uint32_t SectionAlignment;
+    uint32_t FileAlignment;
+    uint16_t MajorOperatingSystemVersion;
+    uint16_t MinorOperatingSystemVersion;
+    uint16_t MajorImageVersion;
+    uint16_t MinorImageVersion;
+    uint16_t MajorSubsystemVersion;
+    uint16_t MinorSubsystemVersion;
+    uint32_t Win32VersionValue;
+    uint32_t SizeOfImage;
+    uint32_t SizeOfHeaders;
+    uint32_t CheckSum;
+    uint16_t Subsystem;
+    uint16_t DllCharacteristics;
+    uint32_t SizeOfStackReserve;
+    uint32_t SizeOfStackCommit;
+    uint32_t SizeOfHeapReserve;
+    uint32_t SizeOfHeapCommit;
+    uint32_t LoaderFlags;
+    uint32_t NumberOfRvaAndSizes;
+    IMAGE_DATA_DIRECTORY DataDirectory[16];
+} IMAGE_OPTIONAL_HEADER32;
+
+// 240 Bytes
+typedef struct {
+    uint16_t  Magic;                      
+    uint8_t   MajorLinkerVersion;
+    uint8_t   MinorLinkerVersion;
+    uint32_t  SizeOfCode;
+    uint32_t  SizeOfInitializedData;
+    uint32_t  SizeOfUninitializedData;
+    uint32_t  AddressOfEntryPoint;
+    uint32_t  BaseOfCode;
+    uint64_t  ImageBase;
+    uint32_t  SectionAlignment;
+    uint32_t  FileAlignment;
+    uint16_t  MajorOperatingSystemVersion;
+    uint16_t  MinorOperatingSystemVersion;
+    uint16_t  MajorImageVersion;
+    uint16_t  MinorImageVersion;
+    uint16_t  MajorSubsystemVersion;
+    uint16_t  MinorSubsystemVersion;
+    uint32_t  Win32VersionValue;
+    uint32_t  SizeOfImage;
+    uint32_t  SizeOfHeaders;
+    uint32_t  CheckSum;
+    uint16_t  Subsystem;
+    uint16_t  DllCharacteristics;
+    uint64_t  SizeOfStackReserve;           
+    uint64_t  SizeOfStackCommit;            
+    uint64_t  SizeOfHeapReserve;          
+    uint64_t  SizeOfHeapCommit;           
+    uint32_t  LoaderFlags;
+    uint32_t  NumberOfRvaAndSizes;
+    IMAGE_DATA_DIRECTORY DataDirectory[16]; 
+} IMAGE_OPTIONAL_HEADER64;
 #pragma pack(pop)
 
 int main(int argc,char **argv){
@@ -38,42 +115,49 @@ int main(int argc,char **argv){
         }else{
             printf("Read error\n");
         }
-        fclose(f);
-        return 1;
+        failToReadOrSeek(f); 
     }
     
     if(dos.e_magic != 0x5A4D){
         printf("%s is not PE\n", argv[1]);
         return 0;
     }
+    fseek(f, 0, SEEK_END);
+    long long fileSize = ftell(f);
+    rewind(f);
+    if(dos.e_lfanew > fileSize - (4 + sizeof(IMAGE_FILE_HEADER))){
+        printf("[!] File is too small to contain a valid PE header\n");
+        failToReadOrSeek(f);
+    }
 
     if(fseek(f, dos.e_lfanew, SEEK_SET) != 0){
         printf("Seek failed");
-        fclose(f);
-        return 1;
+        failToReadOrSeek(f);
     }
-
+;
     uint32_t pe_sig;
     if(fread(&pe_sig, sizeof(pe_sig), 1, f) != 1){
-         printf("Read PE signature failed\n");
-         fclose(f);
-         return 1;
+        printf("Read PE signature failed\n");
+        failToReadOrSeek(f);
     }
 
     if(pe_sig == 0x00004550){
         printf("%s Valid PE\n", argv[1]);
     }else{
         printf("%s Invalid PE\n", argv[1]);
-        fclose(f);
-        return 1;
+        failToReadOrSeek(f);
     }
     
     IMAGE_FILE_HEADER fileHeader;
-
     if (fread(&fileHeader, sizeof(fileHeader), 1, f) != 1) {
         printf("Read FILE_HEADER failed\n");
-        fclose(f);
-        return 1;
+        failToReadOrSeek(f);
+    }
+
+    long long cur = ftell(f);
+    if(cur + fileHeader.SizeOfOptionalHeader > fileSize){
+        printf("[!] Optional header truncated\n");
+        failToReadOrSeek(f);
     }
 
     printf("Number of sections: %u\n", fileHeader.NumberOfSections);
@@ -91,24 +175,64 @@ int main(int argc,char **argv){
         default:
             printf("Architecture: Unknown\n");
     }
-    
+
     if (fileHeader.NumberOfSections == 0) {
         printf("[!] Suspicious: zero sections\n");
+    }else if(fileHeader.NumberOfSections > 96){
+        printf("[!] Suspicious (rare), not invalid\n");
     }
 
     if (fileHeader.SizeOfOptionalHeader == 0) {
         printf("[!] Suspicious: no optional header\n");
     }
 
+    if(fileHeader.SizeOfOptionalHeader < sizeof(uint16_t)){
+        printf("[!] Optional header too small\n");
+        failToReadOrSeek(f);
+    } 
+    uint16_t magic;
+    if(fread(&magic, sizeof(magic), 1, f) != 1){
+        printf("Read Magic failed\n");
+        failToReadOrSeek(f);
+    }
+    if(fseek(f, -sizeof(magic), SEEK_CUR) != 0){
+        printf("Seek rewind magic failed\n");
+        failToReadOrSeek(f);
+    }
 
-    uint32_t sectionOffset = dos.e_lfanew + 4 + sizeof(IMAGE_FILE_HEADER) + fileHeader.SizeOfOptionalHeader;
-    printf("Section table offset :0x%X\n",(unsigned int)sectionOffset);
-    if(fseek(f, sectionOffset, SEEK_SET) != 0){
-        printf("Seek section table offset failed\n");
-        fclose(f);
-        return 1;
+    if(magic == 0x10B){
+        printf("PE32 (32 bits)\n");
+        IMAGE_OPTIONAL_HEADER32 opt32;
+       
+        uint32_t toRead = fileHeader.SizeOfOptionalHeader;
+        if(toRead > sizeof(IMAGE_OPTIONAL_HEADER32))
+            toRead = sizeof(IMAGE_OPTIONAL_HEADER32);
+        
+        if(fread(&opt32, toRead, 1, f) != 1){
+            printf("Read Optional header failed\n");
+            failToReadOrSeek(f);
+        }
+    }else if(magic == 0x20B){
+        printf("PE32+ (64 bits)\n");
+        IMAGE_OPTIONAL_HEADER64 opt64;
+        
+        uint32_t toRead = fileHeader.SizeOfOptionalHeader;
+        if (toRead > sizeof(IMAGE_OPTIONAL_HEADER64))
+            toRead = sizeof(IMAGE_OPTIONAL_HEADER64);
+        if(fread(&opt64, toRead, 1, f) != 1){
+            printf("Read Optional header failed\n");
+            failToReadOrSeek(f);
+        }
+    }else{
+        printf("Unknown optional header\n");
     }
 
     fclose(f);
     return 0;
+
+}
+void failToReadOrSeek(FILE *f){
+    if(f != NULL)
+        fclose(f);
+    exit(1);
 }
