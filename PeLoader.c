@@ -96,6 +96,7 @@ typedef struct {
     IMAGE_DATA_DIRECTORY DataDirectory[16]; 
 } IMAGE_OPTIONAL_HEADER64;
 
+// 40 Bytes
 typedef struct {
     uint8_t Name[8];
     union {
@@ -111,6 +112,14 @@ typedef struct {
     uint16_t NumberOfLinenumbers;
     uint32_t Characteristics;
 } IMAGE_SECTION_HEADER;
+
+typedef struct{
+    uint32_t OriginalFirstThunk;
+    uint32_t TimeDateStamp;
+    uint32_t ForwardChain;
+    uint32_t Name;
+    uint32_t FirstThunk;
+} IMAGE_IMPORT_DESCRIPTOR;
 #pragma pack(pop)
 
 typedef struct {
@@ -366,12 +375,46 @@ int main(int argc,char **argv){
         printf("    Size Of RawData: 0x%X\n", sections[i].SizeOfRawData);
     }
     uint32_t importOffset;
-    if(rva_to_offset(common.ImportRVA,sections,fileHeader.NumberOfSections,&importOffset)){
-        printf("Import file offset: 0x%X\n",importOffset);
-    }else{
+    if(!rva_to_offset(common.ImportRVA,sections,fileHeader.NumberOfSections,&importOffset)){
         printf("[!] Failed to map Import RVA\n");
+        mistakeOccured(f);
     }
+    printf("Import file offset: 0x%X\n",importOffset);
+    fseek(f,importOffset, SEEK_SET);
+    
+    IMAGE_IMPORT_DESCRIPTOR desc;
+    printf("\n=== Imports ===\n");
+    while(1){
+        if(fread(&desc, sizeof(desc), 1,f) != 1){
+            printf("Read import descriptor failed\n");
+            break;
+        }
 
+        if(desc.Name == 0){
+            break;
+        }
+        uint32_t nameOffset;
+        if (!rva_to_offset(desc.Name, sections, fileHeader.NumberOfSections, &nameOffset)) {
+            printf("Failed to convert DLL name RVA\n");
+            continue;
+        }
+
+        cur = ftell(f);
+        fseek(f, nameOffset, SEEK_SET);
+
+        char dllName[256];
+        size_t i = 0;
+        int c;
+
+        while(i < sizeof(dllName) - 1 && (c = fgetc(f)) != EOF && c != '\0') {
+            dllName[i++] = (char)c;
+        }
+        dllName[i] = '\0';
+
+        printf("DLL: %s\n",dllName);
+        
+        fseek(f,cur, SEEK_SET);
+    }
 
     fclose(f);
     return 0;
