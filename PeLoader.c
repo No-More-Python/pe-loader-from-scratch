@@ -16,10 +16,24 @@ typedef struct {
     uint32_t SectionAlignment;
     uint32_t ImportRVA;
     uint32_t ImportSize;
+    uint32_t RelocRVA;
+    uint32_t RelocSize;
 } PE_OPTIONAL_COMMON;
 
 void mistakeOccured(FILE *f);
 int rva_to_offset(uint32_t rva, IMAGE_SECTION_HEADER *section, uint16_t numSections,uint32_t *outOffset);
+void relocation64(
+        uint8_t *imageBase, 
+        uint64_t preferredBase, 
+        uint32_t relocRVA, 
+        uint32_t relocSize
+);
+void relocation32(
+        uint8_t *imageBase, 
+        uint32_t preferredBase, 
+        uint32_t relocRVA, 
+        uint32_t relocSize
+);
 
 int main(int argc,char **argv){
     if(argc < 2){
@@ -48,7 +62,7 @@ int main(int argc,char **argv){
     fseek(f, 0, SEEK_END);
     long long fileSize = ftell(f);
     rewind(f);
-    if(dos.e_lfanew > fileSize - (4 + sizeof(IMAGE_FILE_HEADER))){
+    if((unsigned long)dos.e_lfanew > fileSize - (4 + sizeof(IMAGE_FILE_HEADER))){
         printf("[!] File is too small to contain a valid PE header\n");
         mistakeOccured(f);
     }
@@ -117,7 +131,7 @@ int main(int argc,char **argv){
         printf("Read Magic failed\n");
         mistakeOccured(f);
     }
-    if(fseek(f, -sizeof(magic), SEEK_CUR) != 0){
+    if(fseek(f, -(long)sizeof(magic), SEEK_CUR) != 0){
         printf("Seek rewind magic failed\n");
         mistakeOccured(f);
     }
@@ -144,10 +158,12 @@ int main(int argc,char **argv){
         common.NumberOfRvaAndSizes = opt32.NumberOfRvaAndSizes;
         common.SectionAlignment = opt32.SectionAlignment;
         if(common.NumberOfRvaAndSizes > 1){
-            common.ImportRVA  = opt32.DataDirectory[1].VirtualAddress;
-            common.ImportSize = opt32.DataDirectory[1].Size;
+            common.ImportRVA  = opt32.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress;
+            common.ImportSize = opt32.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size;
         } 
         common.SizeOfHeaders = opt32.SizeOfHeaders;
+        common.RelocRVA = opt32.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
+        common.RelocSize = opt32.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
     }else if(magic == 0x20B){
         printf("PE32+ (64 bits)\n");
         IMAGE_OPTIONAL_HEADER64 opt64;
@@ -171,6 +187,8 @@ int main(int argc,char **argv){
             common.ImportSize = opt64.DataDirectory[1].Size;
         }
         common.SizeOfHeaders = opt64.SizeOfHeaders;
+        common.RelocRVA = opt64.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
+        common.RelocSize = opt64.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
     }else{
         printf("Unknown optional header\n");
         mistakeOccured(f);
@@ -180,7 +198,7 @@ int main(int argc,char **argv){
         printf("[!] Suspicious: Original Entry Point(OEP) outside image\n");
     }
     printf("OEP: 0x%X\n", common.AddressOfEntryPoint);
-    printf("Image base: 0x%I64X\n",(unsigned long long)common.ImageBase);
+    printf("Image base: 0x%llX\n",(unsigned long long)common.ImageBase);
     printf("Subsystem: ");
     switch(common.Subsystem){
         case 1:
@@ -228,7 +246,7 @@ int main(int argc,char **argv){
 
     long sectionTableOffset = dos.e_lfanew + 4 + 
         sizeof(IMAGE_FILE_HEADER) + fileHeader.SizeOfOptionalHeader; 
-    if(sectionTableOffset + (long)fileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER) > fileSize){
+    if((size_t)sectionTableOffset + (size_t)fileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER) > (size_t)fileSize){
             printf("[!] Section table truncated\n");
             mistakeOccured(f);
         }
@@ -378,9 +396,23 @@ int main(int argc,char **argv){
             memset(dest + rawSize, 0, virtSize - rawSize);
         }
     }
-    printf("OEP VA: %p\n", (uint8_t*)imageMemory + common.AddressOfEntryPoint);
 
     free(sections);
+    printf("OEP VA: %p\n", (uint8_t*)imageMemory + common.AddressOfEntryPoint);
+
+    uint32_t sizeReloc = common.RelocSize; 
+    if(sizeReloc == 0){
+        printf("[!] No reloc section\n");
+    }
+
+
+    if(magic == 0x10B){
+        relocation32(imageMemory, common.ImageBase, common.RelocRVA, common.RelocSize);
+    }else{
+        relocation64(imageMemory, common.ImageBase, common.RelocRVA, common.RelocSize);
+    }
+
+
     VirtualFree(imageMemory, 0, MEM_RELEASE);
     fclose(f);
     return 0;
@@ -407,4 +439,99 @@ int rva_to_offset(uint32_t rva, IMAGE_SECTION_HEADER *section, uint16_t numSecti
         }
     }
     return 0;
+}
+void relocation64(
+        uint8_t *imageBase, 
+        uint64_t preferredBase, 
+        uint32_t relocRVA, 
+        uint32_t relocSize 
+){
+    uintptr_t delta = (uintptr_t)imageBase - preferredBase; 
+    if(delta == 0){
+        printf("[*] No relocation needed\n");
+        return;
+    }
+
+    if(relocSize == 0 || relocRVA == 0){
+        printf("[!] No relocation directory\n");
+        return;
+    }
+
+    IMAGE_BASE_RELOCATION *block = (IMAGE_BASE_RELOCATION*)(imageBase + relocRVA);
+    uint8_t *relocEnd = (uint8_t*)block + relocSize;
+    int unknownCount = 0;
+
+    while((uint8_t*)block < relocEnd && block->SizeOfBlock){
+       uint32_t entryCount = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
+
+       WORD *entry = (WORD*)(block +1 );
+
+       for(uint32_t i = 0; i < entryCount; i++){
+            uint16_t raw = *(entry + i);
+            uint16_t type = raw >> 12;
+            uint16_t offset = raw & 0x0FFF;
+            
+            if(type == IMAGE_REL_BASED_DIR64){
+                uint64_t *patchAddr = (uint64_t*)(imageBase + block->VirtualAddress + offset);
+
+                *patchAddr += delta;
+            }else if(type == IMAGE_REL_BASED_ABSOLUTE){
+            // ignore this case
+            }else{
+                unknownCount++;
+            }
+        }
+        block = (IMAGE_BASE_RELOCATION*)((uint8_t*)block + block->SizeOfBlock);
+    }
+    if(unknownCount)
+        printf("[!] Unknow relocation entries: %d\n",unknownCount);
+    printf("[+] Relocation (64-bits) succeeded\n");
+}
+void relocation32(
+    uint8_t *imageBase,
+    uint32_t preferredBase,
+    uint32_t relocRVA,
+    uint32_t relocSize
+){
+    uintptr_t delta = (uintptr_t)imageBase - preferredBase;
+
+    if(delta == 0){
+        printf("[*] No relocation needed\n");
+        return;
+    }
+
+    if(relocSize == 0 || relocRVA == 0){
+        printf("[!] No relocation directory\n");
+        return;
+    }
+    
+    IMAGE_BASE_RELOCATION *block = (IMAGE_BASE_RELOCATION*)(imageBase + relocRVA);
+    uint8_t *relocEnd = (uint8_t*)block + relocSize;
+
+    int unknownCount = 0;
+
+    while((uint8_t*)block < relocEnd && block->SizeOfBlock){
+        uint32_t entryCount = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
+        WORD *entry = (WORD*)(block + 1);
+
+        for(uint32_t i = 0; i < entryCount; i++){
+            uint16_t raw = *(entry + i);
+            uint16_t type = raw >> 12;
+            uint16_t offset = raw & 0x0FFF;
+
+            if(type == IMAGE_REL_BASED_HIGHLOW){
+                uint32_t* patchAddr = (uint32_t*)(imageBase + block->VirtualAddress + offset);
+
+                *patchAddr += (uint32_t)delta;
+            }else if(type == IMAGE_REL_BASED_ABSOLUTE){
+                // ignore
+            }else{
+                unknownCount++;
+            }
+        }
+        block = (IMAGE_BASE_RELOCATION*)((uint8_t*)block + block->SizeOfBlock);
+    }
+    if(unknownCount)
+        printf("[!] Unknown relocation entries: %d\n",unknownCount);
+    printf("[+] Relocation (32-bits) succeeded\n");
 }
