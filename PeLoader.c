@@ -20,7 +20,6 @@ typedef struct {
     uint32_t RelocSize;
 } PE_OPTIONAL_COMMON;
 
-void mistakeOccured(FILE *f);
 int rva_to_offset(uint32_t rva, IMAGE_SECTION_HEADER *section, uint16_t numSections,uint32_t *outOffset);
 void relocation64(
         uint8_t *imageBase, 
@@ -40,8 +39,14 @@ int main(int argc,char **argv){
         printf("Usage : %s <Filename>\n", argv[0]);
         return 1;
     }
-    
-    FILE *f = fopen(argv[1], "rb");
+    FILE *f = NULL;
+    IMAGE_SECTION_HEADER *sections = NULL;
+    uint8_t *headers = NULL;
+    uint8_t *buffer = NULL;
+    LPVOID imageMemory = NULL;
+    int status = 1;
+
+    f = fopen(argv[1], "rb");
     if (!f) return 1;
 
     IMAGE_DOS_HEADER dos;
@@ -52,48 +57,50 @@ int main(int argc,char **argv){
         }else{
             printf("Read error\n");
         }
-        mistakeOccured(f); 
+        goto cleanup; 
     }
     
     if(dos.e_magic != 0x5A4D){
         printf("%s is not PE\n", argv[1]);
-        return 0;
+        status = 1;
+        goto cleanup; 
     }
     fseek(f, 0, SEEK_END);
     long long fileSize = ftell(f);
     rewind(f);
     if((unsigned long)dos.e_lfanew > fileSize - (4 + sizeof(IMAGE_FILE_HEADER))){
         printf("[!] File is too small to contain a valid PE header\n");
-        mistakeOccured(f);
+        goto cleanup;
     }
 
     if(fseek(f, dos.e_lfanew, SEEK_SET) != 0){
         printf("Seek failed");
-        mistakeOccured(f);
+        goto cleanup; 
     }
     uint32_t pe_sig;
     if(fread(&pe_sig, sizeof(pe_sig), 1, f) != 1){
         printf("Read PE signature failed\n");
-        mistakeOccured(f);
+        goto cleanup; 
     }
 
     if(pe_sig == 0x00004550){
         printf("%s Valid PE\n", argv[1]);
     }else{
         printf("%s Invalid PE\n", argv[1]);
-        mistakeOccured(f);
+        goto cleanup;
     }
     
     IMAGE_FILE_HEADER fileHeader;
     if (fread(&fileHeader, sizeof(fileHeader), 1, f) != 1) {
         printf("Read FILE_HEADER failed\n");
-        mistakeOccured(f);
+        goto cleanup;
     }
 
     long long cur = ftell(f);
+    if(cur < 0) goto cleanup;
     if(cur + fileHeader.SizeOfOptionalHeader > fileSize){
         printf("[!] Optional header truncated\n");
-        mistakeOccured(f);
+        goto cleanup;
     }
 
     printf("Number of sections: %u\n", fileHeader.NumberOfSections);
@@ -114,6 +121,7 @@ int main(int argc,char **argv){
 
     if (fileHeader.NumberOfSections == 0) {
         printf("[!] Suspicious: zero sections\n");
+        goto cleanup;
     }else if(fileHeader.NumberOfSections > 96){
         printf("[!] Suspicious (rare), not invalid\n");
     }
@@ -124,16 +132,16 @@ int main(int argc,char **argv){
 
     if(fileHeader.SizeOfOptionalHeader < sizeof(uint16_t)){
         printf("[!] Optional header too small\n");
-        mistakeOccured(f);
+        goto cleanup;
     } 
     uint16_t magic;
     if(fread(&magic, sizeof(magic), 1, f) != 1){
         printf("Read Magic failed\n");
-        mistakeOccured(f);
+        goto cleanup;
     }
     if(fseek(f, -(long)sizeof(magic), SEEK_CUR) != 0){
         printf("Seek rewind magic failed\n");
-        mistakeOccured(f);
+        goto cleanup;
     }
 
     PE_OPTIONAL_COMMON common = {0};
@@ -148,7 +156,7 @@ int main(int argc,char **argv){
         
         if(fread(&opt32, toRead, 1, f) != 1){
             printf("Read Optional header failed\n");
-            mistakeOccured(f);
+            goto cleanup;
         }
         common.ImageBase = opt32.ImageBase;
         common.AddressOfEntryPoint = opt32.AddressOfEntryPoint;
@@ -173,7 +181,7 @@ int main(int argc,char **argv){
             toRead = sizeof(IMAGE_OPTIONAL_HEADER64);
         if(fread(&opt64, toRead, 1, f) != 1){
             printf("Read Optional header failed\n");
-            mistakeOccured(f);
+            goto cleanup;
         }
         common.ImageBase = opt64.ImageBase;
         common.AddressOfEntryPoint = opt64.AddressOfEntryPoint;
@@ -191,7 +199,7 @@ int main(int argc,char **argv){
         common.RelocSize = opt64.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
     }else{
         printf("Unknown optional header\n");
-        mistakeOccured(f);
+        goto cleanup;
     }
 
     if(common.AddressOfEntryPoint >= common.SizeOfImage){
@@ -223,7 +231,7 @@ int main(int argc,char **argv){
     
     if(common.SectionAlignment == 0){
         printf("[!] Invalid SectionAlignment\n");
-        mistakeOccured(f);
+        goto cleanup;
     }
 
     if(common.SizeOfImage % common.SectionAlignment != 0){
@@ -248,23 +256,22 @@ int main(int argc,char **argv){
         sizeof(IMAGE_FILE_HEADER) + fileHeader.SizeOfOptionalHeader; 
     if((size_t)sectionTableOffset + (size_t)fileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER) > (size_t)fileSize){
             printf("[!] Section table truncated\n");
-            mistakeOccured(f);
+            goto cleanup;
         }
     
     if(fseek(f, sectionTableOffset,SEEK_SET) != 0){
         printf("Seek section table failed\n");
-        mistakeOccured(f);
+        goto cleanup;
     }
-    IMAGE_SECTION_HEADER *sections = malloc(fileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER));
+    sections = malloc(fileHeader.NumberOfSections * sizeof(IMAGE_SECTION_HEADER));
     if(!sections){
         printf("Memory allocation failed\n");
-        mistakeOccured(f);
+        goto cleanup;
     }
 
     if(fread(sections, sizeof(IMAGE_SECTION_HEADER), fileHeader.NumberOfSections, f) != fileHeader.NumberOfSections){
         printf("Read section table failed\n");
-        free(sections);
-        mistakeOccured(f);
+        goto cleanup;
     }
 
     printf("\n=== Sections ===\n");
@@ -281,7 +288,7 @@ int main(int argc,char **argv){
     uint32_t importOffset;
     if(!rva_to_offset(common.ImportRVA,sections,fileHeader.NumberOfSections,&importOffset)){
         printf("[!] Failed to map Import RVA\n");
-        mistakeOccured(f);
+        goto cleanup;
     }
     printf("Import file offset: 0x%X\n",importOffset);
     fseek(f,importOffset, SEEK_SET);
@@ -321,7 +328,7 @@ int main(int argc,char **argv){
     }
     printf("\n");
 
-    LPVOID imageMemory = VirtualAlloc(
+        imageMemory = VirtualAlloc(
         (LPVOID)(uintptr_t)common.ImageBase,
         common.SizeOfImage,
         MEM_RESERVE | MEM_COMMIT,
@@ -340,26 +347,24 @@ int main(int argc,char **argv){
 
         if(!imageMemory){
             printf("[!] VirtualAllocate failed\n");
-            mistakeOccured(f);
+            goto cleanup;
         }
     }
 
     printf("Allocated at: %p\n",imageMemory);
 
     rewind(f);
-
-    uint8_t *headers = malloc(common.SizeOfHeaders);
+    headers = malloc(common.SizeOfHeaders);
     if(!headers){
         printf("Malloc failed\n");
-        return 1;
+        goto cleanup;
     }
     if(fread(headers, 1, common.SizeOfHeaders, f) != common.SizeOfHeaders){
         printf("Read headers failed\n");
-        mistakeOccured(f);
+        goto cleanup;
     }
 
     memcpy(imageMemory, headers, common.SizeOfHeaders);
-    free(headers);
 
     printf("\n=== Mapping Section ===\n");
 
@@ -374,22 +379,21 @@ int main(int argc,char **argv){
         if(rawSize > 0){
             if(fseek(f, rawPtr, SEEK_SET) != 0){
                 printf("[!] Seek to section raw failed\n");
-                mistakeOccured(f);
+                goto cleanup;
             }
 
-            uint8_t *buffer = malloc(rawSize);
+            buffer = malloc(rawSize);
             if(!buffer){
                 printf("[!] malloc failed\n");
-                mistakeOccured(f);
+                goto cleanup;
             }
             if(fread(buffer, 1, rawSize, f) != rawSize){
                 printf("[!] Read section raw failed\n");
-                free(buffer);
-                mistakeOccured(f);
+                goto cleanup;
             }
-
             memcpy(dest, buffer, rawSize);
             free(buffer);
+            buffer = NULL;
         }
 
         if(virtSize > rawSize){
@@ -397,7 +401,6 @@ int main(int argc,char **argv){
         }
     }
 
-    free(sections);
     printf("OEP VA: %p\n", (uint8_t*)imageMemory + common.AddressOfEntryPoint);
 
     uint32_t sizeReloc = common.RelocSize; 
@@ -413,15 +416,18 @@ int main(int argc,char **argv){
     }
 
 
-    VirtualFree(imageMemory, 0, MEM_RELEASE);
-    fclose(f);
-    return 0;
+    status = 0;
+    goto cleanup;
 
-}
-void mistakeOccured(FILE *f){
-    if(f != NULL)
-        fclose(f);
-    exit(1);
+
+    cleanup:
+        if (buffer) free(buffer);
+        if (sections) free(sections);
+        if (headers) free(headers);
+        if (imageMemory) VirtualFree(imageMemory, 0, MEM_RELEASE);
+        if (f) fclose(f);
+        return status;
+
 }
 int rva_to_offset(uint32_t rva, IMAGE_SECTION_HEADER *section, uint16_t numSections, uint32_t *outOffset){
     for(int i = 0; i< numSections; i++){
