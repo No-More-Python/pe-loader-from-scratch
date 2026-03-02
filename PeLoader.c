@@ -2,125 +2,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
-#pragma pack(push, 1)
-// 64 Bytes
-typedef struct{
-    uint16_t e_magic;
-    uint8_t padding[58];
-    uint32_t e_lfanew;
-} IMAGE_DOS_HEADER;
-
-// 20 Bytes
-typedef struct{
-    uint16_t Machine;
-    uint16_t NumberOfSections;
-    uint32_t TimeDateStamp;
-    uint32_t PointerToSymbolTable;
-    uint32_t NumberOfSymbols;
-    uint16_t SizeOfOptionalHeader;
-    uint16_t Characteristics;
-} IMAGE_FILE_HEADER;
-
-typedef struct{
-    uint32_t VirtualAddress;
-    uint32_t Size;
-} IMAGE_DATA_DIRECTORY;
-
-// 224 Bytes
-typedef struct{
-    uint16_t Magic;
-    uint8_t MajorLinkerVersion;
-    uint8_t MinorLinkerVersion;
-    uint32_t SizeOfCode;
-    uint32_t SizeOfInitializedData;
-    uint32_t SizeOfUninitializedData;
-    uint32_t AddressOfEntryPoint;
-    uint32_t BaseOfCode;
-    uint32_t BaseOfData;
-    uint32_t ImageBase;
-    uint32_t SectionAlignment;
-    uint32_t FileAlignment;
-    uint16_t MajorOperatingSystemVersion;
-    uint16_t MinorOperatingSystemVersion;
-    uint16_t MajorImageVersion;
-    uint16_t MinorImageVersion;
-    uint16_t MajorSubsystemVersion;
-    uint16_t MinorSubsystemVersion;
-    uint32_t Win32VersionValue;
-    uint32_t SizeOfImage;
-    uint32_t SizeOfHeaders;
-    uint32_t CheckSum;
-    uint16_t Subsystem;
-    uint16_t DllCharacteristics;
-    uint32_t SizeOfStackReserve;
-    uint32_t SizeOfStackCommit;
-    uint32_t SizeOfHeapReserve;
-    uint32_t SizeOfHeapCommit;
-    uint32_t LoaderFlags;
-    uint32_t NumberOfRvaAndSizes;
-    IMAGE_DATA_DIRECTORY DataDirectory[16];
-} IMAGE_OPTIONAL_HEADER32;
-
-// 240 Bytes
-typedef struct {
-    uint16_t  Magic;                      
-    uint8_t   MajorLinkerVersion;
-    uint8_t   MinorLinkerVersion;
-    uint32_t  SizeOfCode;
-    uint32_t  SizeOfInitializedData;
-    uint32_t  SizeOfUninitializedData;
-    uint32_t  AddressOfEntryPoint;
-    uint32_t  BaseOfCode;
-    uint64_t  ImageBase;
-    uint32_t  SectionAlignment;
-    uint32_t  FileAlignment;
-    uint16_t  MajorOperatingSystemVersion;
-    uint16_t  MinorOperatingSystemVersion;
-    uint16_t  MajorImageVersion;
-    uint16_t  MinorImageVersion;
-    uint16_t  MajorSubsystemVersion;
-    uint16_t  MinorSubsystemVersion;
-    uint32_t  Win32VersionValue;
-    uint32_t  SizeOfImage;
-    uint32_t  SizeOfHeaders;
-    uint32_t  CheckSum;
-    uint16_t  Subsystem;
-    uint16_t  DllCharacteristics;
-    uint64_t  SizeOfStackReserve;           
-    uint64_t  SizeOfStackCommit;            
-    uint64_t  SizeOfHeapReserve;          
-    uint64_t  SizeOfHeapCommit;           
-    uint32_t  LoaderFlags;
-    uint32_t  NumberOfRvaAndSizes;
-    IMAGE_DATA_DIRECTORY DataDirectory[16]; 
-} IMAGE_OPTIONAL_HEADER64;
-
-// 40 Bytes
-typedef struct {
-    uint8_t Name[8];
-    union {
-        uint32_t PhysicalAddress;
-        uint32_t VirtualSize;
-    } Misc;
-    uint32_t VirtualAddress;
-    uint32_t SizeOfRawData;
-    uint32_t PointerToRawData;
-    uint32_t PointerToRelocations;
-    uint32_t PointerToLinenumbers;
-    uint16_t NumberOfRelocations;
-    uint16_t NumberOfLinenumbers;
-    uint32_t Characteristics;
-} IMAGE_SECTION_HEADER;
-
-typedef struct{
-    uint32_t OriginalFirstThunk;
-    uint32_t TimeDateStamp;
-    uint32_t ForwardChain;
-    uint32_t Name;
-    uint32_t FirstThunk;
-} IMAGE_IMPORT_DESCRIPTOR;
-#pragma pack(pop)
+#include <windows.h>
+#include <inttypes.h>
 
 typedef struct {
     uint64_t ImageBase;
@@ -128,6 +11,7 @@ typedef struct {
     uint16_t Subsystem;
     uint16_t DllCharacteristics;
     uint32_t SizeOfImage;
+    uint32_t SizeOfHeaders;
     uint32_t NumberOfRvaAndSizes;
     uint32_t SectionAlignment;
     uint32_t ImportRVA;
@@ -263,6 +147,7 @@ int main(int argc,char **argv){
             common.ImportRVA  = opt32.DataDirectory[1].VirtualAddress;
             common.ImportSize = opt32.DataDirectory[1].Size;
         } 
+        common.SizeOfHeaders = opt32.SizeOfHeaders;
     }else if(magic == 0x20B){
         printf("PE32+ (64 bits)\n");
         IMAGE_OPTIONAL_HEADER64 opt64;
@@ -285,6 +170,7 @@ int main(int argc,char **argv){
             common.ImportRVA  = opt64.DataDirectory[1].VirtualAddress;
             common.ImportSize = opt64.DataDirectory[1].Size;
         }
+        common.SizeOfHeaders = opt64.SizeOfHeaders;
     }else{
         printf("Unknown optional header\n");
         mistakeOccured(f);
@@ -369,10 +255,10 @@ int main(int argc,char **argv){
         memcpy(name, sections[i].Name, 8);
 
         printf("[%d] %s\n",i+1 , name);
-        printf("    Virtual Address: 0x%X\n", sections[i].VirtualAddress);
-        printf("    Virtual Size: 0x%X\n", sections[i].Misc.VirtualSize);
-        printf("    Pointer To RawData: 0x%X\n", sections[i].PointerToRawData);
-        printf("    Size Of RawData: 0x%X\n", sections[i].SizeOfRawData);
+        printf("    Virtual Address: 0x%X\n", (unsigned int)sections[i].VirtualAddress);
+        printf("    Virtual Size: 0x%X\n", (unsigned int)sections[i].Misc.VirtualSize);
+        printf("    Pointer To RawData: 0x%X\n", (unsigned int)sections[i].PointerToRawData);
+        printf("    Size Of RawData: 0x%X\n", (unsigned int)sections[i].SizeOfRawData);
     }
     uint32_t importOffset;
     if(!rva_to_offset(common.ImportRVA,sections,fileHeader.NumberOfSections,&importOffset)){
@@ -415,7 +301,87 @@ int main(int argc,char **argv){
         
         fseek(f,cur, SEEK_SET);
     }
+    printf("\n");
 
+    LPVOID imageMemory = VirtualAlloc(
+        (LPVOID)(uintptr_t)common.ImageBase,
+        common.SizeOfImage,
+        MEM_RESERVE | MEM_COMMIT,
+        PAGE_READWRITE
+    );
+
+    if(!imageMemory){
+        printf("[!] Allocate at preferred base failed, trying anywhere\n");
+
+        imageMemory = VirtualAlloc(
+            NULL,
+            common.SizeOfImage,
+            MEM_RESERVE | MEM_COMMIT,
+            PAGE_READWRITE
+            );
+
+        if(!imageMemory){
+            printf("[!] VirtualAllocate failed\n");
+            mistakeOccured(f);
+        }
+    }
+
+    printf("Allocated at: %p\n",imageMemory);
+
+    rewind(f);
+
+    uint8_t *headers = malloc(common.SizeOfHeaders);
+    if(!headers){
+        printf("Malloc failed\n");
+        return 1;
+    }
+    if(fread(headers, 1, common.SizeOfHeaders, f) != common.SizeOfHeaders){
+        printf("Read headers failed\n");
+        mistakeOccured(f);
+    }
+
+    memcpy(imageMemory, headers, common.SizeOfHeaders);
+    free(headers);
+
+    printf("\n=== Mapping Section ===\n");
+
+    for(int i = 0; i < fileHeader.NumberOfSections; i++){
+        uint8_t *dest = (uint8_t*)imageMemory + sections[i].VirtualAddress;
+        uint32_t rawSize = sections[i].SizeOfRawData;
+        uint32_t rawPtr = sections[i].PointerToRawData;
+        uint32_t virtSize = sections[i].Misc.VirtualSize;
+
+        printf("[%d] Mapping %.*s\n", i+1, 8, sections[i].Name);
+
+        if(rawSize > 0){
+            if(fseek(f, rawPtr, SEEK_SET) != 0){
+                printf("[!] Seek to section raw failed\n");
+                mistakeOccured(f);
+            }
+
+            uint8_t *buffer = malloc(rawSize);
+            if(!buffer){
+                printf("[!] malloc failed\n");
+                mistakeOccured(f);
+            }
+            if(fread(buffer, 1, rawSize, f) != rawSize){
+                printf("[!] Read section raw failed\n");
+                free(buffer);
+                mistakeOccured(f);
+            }
+
+            memcpy(dest, buffer, rawSize);
+            free(buffer);
+        }
+
+        if(virtSize > rawSize){
+            memset(dest + rawSize, 0, virtSize - rawSize);
+        }
+    }
+    printf("OEP VA: %p\n", (uint8_t*)imageMemory + common.AddressOfEntryPoint);
+
+    free(sections);
+    VirtualFree(imageMemory, 0, MEM_RELEASE);
     fclose(f);
     return 0;
 
