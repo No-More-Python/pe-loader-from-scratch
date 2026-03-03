@@ -22,20 +22,25 @@ typedef struct {
 
 int rva_to_offset(uint32_t rva, IMAGE_SECTION_HEADER *section, uint16_t numSections,uint32_t *outOffset);
 void relocation64(
-        uint8_t *imageBase, 
-        uint64_t preferredBase, 
-        uint32_t relocRVA, 
-        uint32_t relocSize
-);
-void relocation32(
-        uint8_t *imageBase, 
-        uint32_t preferredBase, 
-        uint32_t relocRVA, 
-        uint32_t relocSize
+    uint8_t *imageBase, 
+    uint64_t preferredBase, 
+    uint32_t relocRVA, 
+    uint32_t relocSize
 );
 
+void relocation32(
+    uint8_t *imageBase, 
+    uint32_t preferredBase, 
+    uint32_t relocRVA, 
+    uint32_t relocSize
+);
+
+int resolve_imports(
+    uint8_t *imageBase,
+    uint32_t importRVA 
+);
 int main(int argc,char **argv){
-    if(argc < 2){
+    if(argc != 2){
         printf("Usage : %s <Filename>\n", argv[0]);
         return 1;
     }
@@ -120,7 +125,7 @@ int main(int argc,char **argv){
     }
 
     if (fileHeader.NumberOfSections == 0) {
-        printf("[!] Suspicious: zero sections\n");
+        printf("Invalid PE: NumberOfSection is 0\n");
         goto cleanup;
     }else if(fileHeader.NumberOfSections > 96){
         printf("[!] Suspicious (rare), not invalid\n");
@@ -415,11 +420,17 @@ int main(int argc,char **argv){
         relocation64(imageMemory, common.ImageBase, common.RelocRVA, common.RelocSize);
     }
 
+    if(!resolve_imports(
+            (uint8_t*)imageMemory,
+            common.ImportRVA
+    )){
+        printf("[!] Import resolution failed\n");
+        goto cleanup;
+    }
+    
 
     status = 0;
     goto cleanup;
-
-
     cleanup:
         if (buffer) free(buffer);
         if (sections) free(sections);
@@ -540,4 +551,63 @@ void relocation32(
     if(unknownCount)
         printf("[!] Unknown relocation entries: %d\n",unknownCount);
     printf("[+] Relocation (32-bits) succeeded\n");
+}
+int resolve_imports(
+    uint8_t *imageBase,
+    uint32_t importRVA 
+){
+    if(importRVA == 0){
+        printf("[!] No import directory\n");
+        return 1;
+    }
+    IMAGE_IMPORT_DESCRIPTOR *desc = (IMAGE_IMPORT_DESCRIPTOR*)(imageBase + importRVA);
+
+    while(desc->Name){
+        char *dllName = (char*)(imageBase + desc->Name);
+        
+        HMODULE hMod = LoadLibraryA(dllName);
+        if(!hMod){
+            printf("[!] LoadLibrary failed\n");
+            return 0;
+        }
+
+        uintptr_t *origThunk = NULL;
+        uintptr_t *firstThunk = (uintptr_t*)(imageBase + desc->FirstThunk);
+
+        if(desc->OriginalFirstThunk){
+            origThunk = (uintptr_t*)(imageBase + desc->OriginalFirstThunk);
+        }else{
+            origThunk = firstThunk;
+        }
+        while(*origThunk){
+            
+            FARPROC func = NULL;
+
+            if(IMAGE_SNAP_BY_ORDINAL(*origThunk)){
+                WORD ordinal = (IMAGE_ORDINAL(*origThunk));
+
+                func = GetProcAddress(hMod,MAKEINTRESOURCEA(ordinal));
+                printf("Ordinal: %u -> %p\n",ordinal, func);
+            }else{
+                IMAGE_IMPORT_BY_NAME *name = (IMAGE_IMPORT_BY_NAME*)(imageBase + (*origThunk));
+
+                func = GetProcAddress(hMod,(LPCSTR)name->Name);
+                printf("%s -> %p\n", name->Name, func);
+            }
+
+            if(!func){
+                printf("[!] GetProcAddress failed\n");
+                return 0;
+            }
+
+            *firstThunk = (uintptr_t)func;
+
+            origThunk++;
+            firstThunk++;
+        }
+
+        desc++;
+    }
+    printf("[+] Import resolution complete\n");
+    return 1;
 }
