@@ -39,6 +39,12 @@ int resolve_imports(
     uint8_t *imageBase,
     uint32_t importRVA 
 );
+
+void section_Protections(
+    uint8_t *imageBase,
+    IMAGE_SECTION_HEADER *sections,
+    uint16_t numSections
+);
 int main(int argc,char **argv){
     if(argc != 2){
         printf("Usage : %s <Filename>\n", argv[0]);
@@ -428,6 +434,8 @@ int main(int argc,char **argv){
         goto cleanup;
     }
     
+    section_Protections(imageMemory, sections, fileHeader.NumberOfSections);
+
 
     status = 0;
     goto cleanup;
@@ -610,4 +618,48 @@ int resolve_imports(
     }
     printf("[+] Import resolution complete\n");
     return 1;
+}
+
+DWORD SectionCharacteristicsToProtect(DWORD ch){
+    BOOL executable = (ch & IMAGE_SCN_MEM_EXECUTE) != 0;
+    BOOL readable = (ch & IMAGE_SCN_MEM_READ) != 0;
+    BOOL writeable = (ch & IMAGE_SCN_MEM_WRITE) != 0;
+
+    if(executable){
+        if(writeable) return PAGE_EXECUTE_READWRITE;
+        if(readable) return PAGE_EXECUTE_READ;
+        return PAGE_EXECUTE;
+    }else{
+        if(writeable) return PAGE_READWRITE;
+        if(readable) return PAGE_READONLY;
+        return PAGE_NOACCESS;
+    }
+}
+
+void section_Protections(
+    uint8_t *imageBase,
+    IMAGE_SECTION_HEADER *sections,
+    uint16_t numSections
+){
+    for(uint16_t i = 0; i< numSections; i++){
+        IMAGE_SECTION_HEADER *sec = sections + i;
+
+        if(sec->SizeOfRawData == 0 && sec->Misc.VirtualSize == 0){
+            continue;
+        }
+
+        uint8_t *secAddr = imageBase + sec->VirtualAddress;
+
+        
+        SIZE_T size = sec->Misc.VirtualSize >= sec->SizeOfRawData ? sec->Misc.VirtualSize:sec->SizeOfRawData;
+
+        DWORD newProtect = SectionCharacteristicsToProtect(sec->Characteristics);
+        DWORD oldProtect = 0;
+
+        if(!VirtualProtect(secAddr, size, newProtect, &oldProtect)){
+            printf("[!] VirtualProtect Failed on section %.8s (err=%lu)\n", sec->Name, GetLastError());
+        }else{
+            printf("[+] Protect section %.8s -> 0x%lX\n", sec->Name, newProtect);
+        }
+    }   
 }
