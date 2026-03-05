@@ -61,7 +61,7 @@ The final implementation uses architecture-aware pointer arithmetic:
 ---
 ## 🚀 Usage (For Educational Testing)
 ### 1. Compile the Loader
-Use GCC to compile the source code into an executable loader
+Use GCC(64 bits) to compile the source code into an executable loader
 
 ```gcc PeLoader.c -o PeLoader.exe```
 
