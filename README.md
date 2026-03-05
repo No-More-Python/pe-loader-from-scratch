@@ -1,5 +1,4 @@
 # 🎓 Learning Windows Internals: Manual PE Mapping
----
 
 ## 📖 Introduction
 This project is an **educational exploration** into the mechanics of the Windows Portable Executable (PE) loader. While a "Pure" Manual Map would involve mapping every dependent DLL manually, this implementation takes a **Hybrid Approach**: 
