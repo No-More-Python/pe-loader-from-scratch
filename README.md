@@ -8,7 +8,7 @@ This project is an **educational exploration** into the mechanics of the Windows
 
 This provides a balanced look at how the OS handles execution handoff while keeping the educational focus on the structure of the main PE file.
 
-...
+---
 
 ## 🔍 The "Hybrid" Import Resolution
 In the `resolve_imports` function, we demonstrate how the IAT is structured. Even though we use `LoadLibraryA` to get the base address of dependencies:
@@ -61,19 +61,22 @@ The final implementation uses architecture-aware pointer arithmetic:
 [Image comparing x86 and x64 instruction sets and pointer sizes]
 
 ## 🚀 Usage (For Educational Testing)
----### 1. Compile the Loader
-Use GCC to compile the source code into an executable loader:```bash
-gcc PeLoader.c -o PeLoader.exe
-2. Prepare a Target Binary
+---
+### 1. Compile the Loader
+Use GCC to compile the source code into an executable loader
+```gcc PeLoader.c -o PeLoader.exe```
+
+### 2. Prepare a Target Binary
 Since the TestFile/ directory is included in .gitignore to keep the repository clean, you must provide your own target binary for testing:
 
 Create a simple "Hello World" program in C.
 Compile it as a 64-bit executable (e.g., hello64.exe).
 Place it inside a folder (e.g., TestFile/).
-3. Run the Loader
+
+### 3. Run the Loader
 Execute the loader by passing the path of your target binary as an argument:
 
-./PeLoader.exe TestFile/hello64.exe
+```./PeLoader.exe TestFile/hello64.exe```
 Note: In this context, hello64.exe is a practical example of how to use this PE-loader-from-scratch 
 to map and execute a binary without relying on the default OS loading mechanism.
 
