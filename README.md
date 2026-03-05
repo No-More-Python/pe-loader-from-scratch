@@ -17,19 +17,17 @@ In the `resolve_imports` function, we demonstrate how the IAT is structured. Eve
 3. We manually patch the function addresses into the allocated memory.
 
 
-## 🧠 Key Learning Objectives
 ---
+## 🧠 Key Learning Objectives
 * **PE Header Anatomy**: Understanding the relationship between `IMAGE_DOS_HEADER`, `IMAGE_FILE_HEADER`, and the Optional Headers (`PE32` vs `PE32+`).
 * **Memory Relocation**: Implementing base relocation logic to ensure code runs correctly when loaded at a non-preferred memory address.
 * **Dynamic Linking**: Deep dive into the **Import Address Table (IAT)** and how DLL dependencies are resolved and patched.
 * **TLS Execution**: Learning the role of **Thread Local Storage (TLS)** callbacks and their execution flow before the main entry point.
 
 
-
-## 🛠️ The Implementation Pipeline
 ---
+## 🛠️ The Implementation Pipeline
 The loader simulates the Windows OS loader through a strict, step-by-step process:
-
 1.  **Header Parsing**: Validates the PE signature and identifies the machine architecture.
 2.  **Memory Allocation**: Reserves contiguous memory based on `SizeOfImage` using `VirtualAlloc`.
 3.  **Section Mapping**: Copies raw data from file sections into their respective virtual addresses.
@@ -39,9 +37,8 @@ The loader simulates the Windows OS loader through a strict, step-by-step proces
 7.  **Execution**: Runs TLS Callbacks followed by a jump to the **Original Entry Point (OEP)**.
 
 
-
-## ⚠️ The Architecture Challenge: x86 vs x64
 ---
+## ⚠️ The Architecture Challenge: x86 vs x64
 A significant portion of this study focused on handling **Architectural Mismatch**. 
 
 ### 🔍 The "Pointer Crisis" Bug
@@ -60,8 +57,9 @@ The final implementation uses architecture-aware pointer arithmetic:
 
 [Image comparing x86 and x64 instruction sets and pointer sizes]
 
-## 🚀 Usage (For Educational Testing)
+
 ---
+## 🚀 Usage (For Educational Testing)
 ### 1. Compile the Loader
 Use GCC to compile the source code into an executable loader
 
