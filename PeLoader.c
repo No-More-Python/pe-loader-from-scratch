@@ -18,6 +18,8 @@ typedef struct {
     uint32_t ImportSize;
     uint32_t RelocRVA;
     uint32_t RelocSize;
+    uint32_t TlsRVA;
+    uint32_t TlsSize;
 } PE_OPTIONAL_COMMON;
 
 int rva_to_offset(uint32_t rva, IMAGE_SECTION_HEADER *section, uint16_t numSections,uint32_t *outOffset);
@@ -37,7 +39,8 @@ void relocation32(
 
 int resolve_imports(
     uint8_t *imageBase,
-    uint32_t importRVA 
+    uint32_t importRVA,
+    int is64
 );
 
 void section_Protections(
@@ -45,6 +48,14 @@ void section_Protections(
     IMAGE_SECTION_HEADER *sections,
     uint16_t numSections
 );
+
+void runTLScallsbacks(
+    uint8_t *imageBase,
+    uint32_t tlsRVA,
+    PE_OPTIONAL_COMMON common,
+    int is64
+);
+void* VaToPtr(uint64_t va, uint64_t imageBase, uint8_t* mappedBase, uint32_t sizeOfImage);
 int main(int argc,char **argv){
     if(argc != 2){
         printf("Usage : %s <Filename>\n", argv[0]);
@@ -156,10 +167,12 @@ int main(int argc,char **argv){
     }
 
     PE_OPTIONAL_COMMON common = {0};
+    int is64;
 
     if(magic == 0x10B){
         printf("PE32 (32 bits)\n");
         IMAGE_OPTIONAL_HEADER32 opt32;
+        is64 = 0;
        
         uint32_t toRead = fileHeader.SizeOfOptionalHeader;
         if(toRead > sizeof(IMAGE_OPTIONAL_HEADER32))
@@ -183,9 +196,14 @@ int main(int argc,char **argv){
         common.SizeOfHeaders = opt32.SizeOfHeaders;
         common.RelocRVA = opt32.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
         common.RelocSize = opt32.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
+        if(common.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_TLS){
+            common.TlsRVA = opt32.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].VirtualAddress;
+            common.TlsSize = opt32.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size;
+        }
     }else if(magic == 0x20B){
         printf("PE32+ (64 bits)\n");
         IMAGE_OPTIONAL_HEADER64 opt64;
+        is64 = 1;
         
         uint32_t toRead = fileHeader.SizeOfOptionalHeader;
         if (toRead > sizeof(IMAGE_OPTIONAL_HEADER64))
@@ -208,6 +226,10 @@ int main(int argc,char **argv){
         common.SizeOfHeaders = opt64.SizeOfHeaders;
         common.RelocRVA = opt64.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].VirtualAddress;
         common.RelocSize = opt64.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC].Size;
+        if(common.NumberOfRvaAndSizes > IMAGE_DIRECTORY_ENTRY_TLS){
+            common.TlsRVA = opt64.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].VirtualAddress;
+            common.TlsSize = opt64.DataDirectory[IMAGE_DIRECTORY_ENTRY_TLS].Size;
+        }
     }else{
         printf("Unknown optional header\n");
         goto cleanup;
@@ -390,8 +412,8 @@ int main(int argc,char **argv){
         if(rawSize > 0){
             if(fseek(f, rawPtr, SEEK_SET) != 0){
                 printf("[!] Seek to section raw failed\n");
-                goto cleanup;
-            }
+                    goto cleanup;
+                }
 
             buffer = malloc(rawSize);
             if(!buffer){
@@ -412,30 +434,25 @@ int main(int argc,char **argv){
         }
     }
 
-    printf("OEP VA: %p\n", (uint8_t*)imageMemory + common.AddressOfEntryPoint);
-
-    uint32_t sizeReloc = common.RelocSize; 
-    if(sizeReloc == 0){
-        printf("[!] No reloc section\n");
-    }
+    printf("\nOEP VA: %p\n", (uint8_t*)imageMemory + common.AddressOfEntryPoint);
 
 
-    if(magic == 0x10B){
-        relocation32(imageMemory, common.ImageBase, common.RelocRVA, common.RelocSize);
-    }else{
+    if(is64){
         relocation64(imageMemory, common.ImageBase, common.RelocRVA, common.RelocSize);
+    }else{
+        relocation32(imageMemory, common.ImageBase, common.RelocRVA, common.RelocSize);
     }
-
-    if(!resolve_imports(
-            (uint8_t*)imageMemory,
-            common.ImportRVA
-    )){
-        printf("[!] Import resolution failed\n");
+    if(!resolve_imports((uint8_t*)imageMemory, common.ImportRVA, is64)){
+        printf("\n[!] Import resolution failed\n");
         goto cleanup;
     }
     
-    section_Protections(imageMemory, sections, fileHeader.NumberOfSections);
-
+        section_Protections(imageMemory, sections, fileHeader.NumberOfSections);
+    if(is64){
+        runTLScallsbacks(imageMemory, common.TlsRVA, common, is64);
+    }else{
+        printf("\n[!] This PE Loader cannot run a 32 bits file\n");
+    }
 
     status = 0;
     goto cleanup;
@@ -511,15 +528,13 @@ void relocation64(
     if(unknownCount)
         printf("[!] Unknow relocation entries: %d\n",unknownCount);
     printf("[+] Relocation (64-bits) succeeded\n");
-}
-void relocation32(
-    uint8_t *imageBase,
-    uint32_t preferredBase,
-    uint32_t relocRVA,
-    uint32_t relocSize
+}void relocation32(
+        uint8_t *imageBase, 
+        uint32_t preferredBase, 
+        uint32_t relocRVA, 
+        uint32_t relocSize 
 ){
-    uintptr_t delta = (uintptr_t)imageBase - preferredBase;
-
+    uintptr_t delta = (uintptr_t)imageBase - preferredBase; 
     if(delta == 0){
         printf("[*] No relocation needed\n");
         return;
@@ -529,27 +544,27 @@ void relocation32(
         printf("[!] No relocation directory\n");
         return;
     }
-    
+
     IMAGE_BASE_RELOCATION *block = (IMAGE_BASE_RELOCATION*)(imageBase + relocRVA);
     uint8_t *relocEnd = (uint8_t*)block + relocSize;
-
     int unknownCount = 0;
 
     while((uint8_t*)block < relocEnd && block->SizeOfBlock){
-        uint32_t entryCount = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
-        WORD *entry = (WORD*)(block + 1);
+       uint32_t entryCount = (block->SizeOfBlock - sizeof(IMAGE_BASE_RELOCATION)) / sizeof(WORD);
 
-        for(uint32_t i = 0; i < entryCount; i++){
+       WORD *entry = (WORD*)(block +1 );
+
+       for(uint32_t i = 0; i < entryCount; i++){
             uint16_t raw = *(entry + i);
             uint16_t type = raw >> 12;
             uint16_t offset = raw & 0x0FFF;
+            
+            if(type == IMAGE_REL_BASED_DIR64){
+                uint32_t *patchAddr = (uint32_t*)(imageBase + block->VirtualAddress + offset);
 
-            if(type == IMAGE_REL_BASED_HIGHLOW){
-                uint32_t* patchAddr = (uint32_t*)(imageBase + block->VirtualAddress + offset);
-
-                *patchAddr += (uint32_t)delta;
+                *patchAddr += delta;
             }else if(type == IMAGE_REL_BASED_ABSOLUTE){
-                // ignore
+            // ignore this case
             }else{
                 unknownCount++;
             }
@@ -557,64 +572,112 @@ void relocation32(
         block = (IMAGE_BASE_RELOCATION*)((uint8_t*)block + block->SizeOfBlock);
     }
     if(unknownCount)
-        printf("[!] Unknown relocation entries: %d\n",unknownCount);
+        printf("[!] Unknow relocation entries: %d\n",unknownCount);
     printf("[+] Relocation (32-bits) succeeded\n");
 }
+
 int resolve_imports(
     uint8_t *imageBase,
-    uint32_t importRVA 
+    uint32_t importRVA,
+    int is64
 ){
+    printf("\n");
     if(importRVA == 0){
         printf("[!] No import directory\n");
         return 1;
     }
     IMAGE_IMPORT_DESCRIPTOR *desc = (IMAGE_IMPORT_DESCRIPTOR*)(imageBase + importRVA);
-
-    while(desc->Name){
-        char *dllName = (char*)(imageBase + desc->Name);
+    
+    if(is64){
+        while(desc->Name){
+            char *dllName = (char*)(imageBase + desc->Name);
         
-        HMODULE hMod = LoadLibraryA(dllName);
-        if(!hMod){
-            printf("[!] LoadLibrary failed\n");
-            return 0;
-        }
-
-        uintptr_t *origThunk = NULL;
-        uintptr_t *firstThunk = (uintptr_t*)(imageBase + desc->FirstThunk);
-
-        if(desc->OriginalFirstThunk){
-            origThunk = (uintptr_t*)(imageBase + desc->OriginalFirstThunk);
-        }else{
-            origThunk = firstThunk;
-        }
-        while(*origThunk){
-            
-            FARPROC func = NULL;
-
-            if(IMAGE_SNAP_BY_ORDINAL(*origThunk)){
-                WORD ordinal = (IMAGE_ORDINAL(*origThunk));
-
-                func = GetProcAddress(hMod,MAKEINTRESOURCEA(ordinal));
-                printf("Ordinal: %u -> %p\n",ordinal, func);
-            }else{
-                IMAGE_IMPORT_BY_NAME *name = (IMAGE_IMPORT_BY_NAME*)(imageBase + (*origThunk));
-
-                func = GetProcAddress(hMod,(LPCSTR)name->Name);
-                printf("%s -> %p\n", name->Name, func);
-            }
-
-            if(!func){
-                printf("[!] GetProcAddress failed\n");
+            HMODULE hMod = LoadLibraryA(dllName);
+            if(!hMod){
+                printf("[!] LoadLibrary failed\n");
                 return 0;
             }
 
-            *firstThunk = (uintptr_t)func;
+            uint64_t *origThunk = NULL;
+            uint64_t *firstThunk  = (uint64_t*)(imageBase + desc->FirstThunk);
 
-            origThunk++;
-            firstThunk++;
+            if(desc->OriginalFirstThunk){
+                origThunk = (uint64_t*)(imageBase + desc->OriginalFirstThunk);
+            }else{
+                origThunk = firstThunk;
+            }
+            while(*origThunk){
+            
+                FARPROC func = NULL;
+
+                if(IMAGE_SNAP_BY_ORDINAL(*origThunk)){
+                    WORD ordinal = (IMAGE_ORDINAL(*origThunk));
+
+                    func = GetProcAddress(hMod,MAKEINTRESOURCEA(ordinal));
+                    printf("Ordinal: %u -> %p\n",ordinal, func);
+                }else{
+                    IMAGE_IMPORT_BY_NAME *name = (IMAGE_IMPORT_BY_NAME*)(imageBase + (*origThunk));
+
+                    func = GetProcAddress(hMod,(LPCSTR)name->Name);
+                    printf("%s -> %p\n", name->Name, func);
+                }
+
+                if(!func){
+                    printf("[!] GetProcAddress failed\n");
+                    return 1;
+                }
+                *firstThunk = (uint64_t)func;
+
+                origThunk++;
+                firstThunk++;
+            }
+            desc++;
         }
+    }else{
+        while(desc->Name){
+            char *dllName = (char*)(imageBase + desc->Name);
+        
+            HMODULE hMod = LoadLibraryA(dllName);
+            if(!hMod){
+                printf("[!] LoadLibrary failed\n");
+                return 0;
+            }
 
-        desc++;
+            uint32_t *origThunk = NULL;
+            uint32_t *firstThunk  = (uint32_t*)(imageBase + desc->FirstThunk);
+
+            if(desc->OriginalFirstThunk){
+                origThunk = (uint32_t*)(imageBase + desc->OriginalFirstThunk);
+            }else{
+                origThunk = firstThunk;
+            }
+            while(*origThunk){
+            
+                FARPROC func = NULL;
+
+                if(IMAGE_SNAP_BY_ORDINAL(*origThunk)){
+                    WORD ordinal = (IMAGE_ORDINAL(*origThunk));
+
+                    func = GetProcAddress(hMod,MAKEINTRESOURCEA(ordinal));
+                    printf("Ordinal: %u -> %p\n",ordinal, func);
+                }else{
+                    IMAGE_IMPORT_BY_NAME *name = (IMAGE_IMPORT_BY_NAME*)(imageBase + (*origThunk));
+
+                    func = GetProcAddress(hMod,(LPCSTR)name->Name);
+                    printf("%s -> %p\n", name->Name, func);
+                }
+
+                if(!func){
+                    printf("[!] GetProcAddress failed\n");
+                    return 1;
+                }
+                *firstThunk = (uint32_t)(uintptr_t)func;
+
+                origThunk++;
+                firstThunk++;
+            }
+            desc++;
+        }
     }
     printf("[+] Import resolution complete\n");
     return 1;
@@ -641,6 +704,7 @@ void section_Protections(
     IMAGE_SECTION_HEADER *sections,
     uint16_t numSections
 ){
+    printf("\n");
     for(uint16_t i = 0; i< numSections; i++){
         IMAGE_SECTION_HEADER *sec = sections + i;
 
@@ -662,4 +726,72 @@ void section_Protections(
             printf("[+] Protect section %.8s -> 0x%lX\n", sec->Name, newProtect);
         }
     }   
+}
+void runTLScallsbacks(uint8_t *imageBase, uint32_t tlsRVA, PE_OPTIONAL_COMMON common, int is64) {
+    if (!tlsRVA) return;
+
+    uint64_t addrOfCallbacks = 0;
+    if(is64){
+        IMAGE_TLS_DIRECTORY64 *tls64 = (IMAGE_TLS_DIRECTORY64*)(imageBase + tlsRVA);
+        addrOfCallbacks = tls64->AddressOfCallBacks;
+    }else{
+        IMAGE_TLS_DIRECTORY32 *tls32 = (IMAGE_TLS_DIRECTORY32*)(imageBase + tlsRVA);
+        addrOfCallbacks = tls32->AddressOfCallBacks;
+    }
+
+    if (!addrOfCallbacks) return;
+
+    void *currentCallbackEntry = VaToPtr(addrOfCallbacks, common.ImageBase, imageBase, common.SizeOfImage);
+    if(!currentCallbackEntry) return;
+
+    if(is64){
+        while(1){
+            uint64_t funcVA = 0;
+
+            funcVA = *(uint64_t*)currentCallbackEntry;
+
+            if(funcVA == 0) break;
+
+            void (*cb)(PVOID, DWORD, PVOID) = (void (*)(PVOID, DWORD, PVOID))VaToPtr(
+                funcVA, common.ImageBase, imageBase, common.SizeOfImage
+            );
+
+            if(cb){
+                printf("[+] Executing TLS Callback at: 0x%" PRIx64 "\n",funcVA);
+                cb(imageBase, DLL_PROCESS_ATTACH, NULL);
+            }
+        
+            currentCallbackEntry = (uint8_t*)currentCallbackEntry + 8;
+        }
+    }else{
+        while(1){
+            uint32_t funcVA = 0;
+
+            funcVA = *(uint32_t*)currentCallbackEntry;
+
+            if(funcVA == 0) break;
+
+            void (*cb)(PVOID, DWORD, PVOID) = (void (*)(PVOID, DWORD, PVOID))VaToPtr(
+                funcVA, common.ImageBase, imageBase, common.SizeOfImage
+            );
+
+            if(cb){
+                printf("[+] Executing TLS Callback at: 0x%u\n",funcVA);
+                cb(imageBase, DLL_PROCESS_ATTACH, NULL);
+            }
+        
+            currentCallbackEntry = (uint8_t*)currentCallbackEntry + 4;
+        }
+    }
+}
+void* VaToPtr(uint64_t va, uint64_t imageBase, uint8_t* mappedBase, uint32_t sizeOfImage){
+    if(va < imageBase)
+        return NULL;
+
+    uint64_t offset = va - imageBase;
+
+    if(offset >= sizeOfImage)
+        return NULL;
+
+    return mappedBase + offset;
 }
