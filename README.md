@@ -64,6 +64,7 @@ The final implementation uses architecture-aware pointer arithmetic:
 ---
 ### 1. Compile the Loader
 Use GCC to compile the source code into an executable loader
+
 ```gcc PeLoader.c -o PeLoader.exe```
 
 ### 2. Prepare a Target Binary
@@ -77,6 +78,7 @@ Place it inside a folder (e.g., TestFile/).
 Execute the loader by passing the path of your target binary as an argument:
 
 ```./PeLoader.exe TestFile/hello64.exe```
+
 Note: In this context, hello64.exe is a practical example of how to use this PE-loader-from-scratch 
 to map and execute a binary without relying on the default OS loading mechanism.
 
