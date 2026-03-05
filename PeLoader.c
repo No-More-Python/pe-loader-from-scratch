@@ -56,6 +56,7 @@ void runTLScallsbacks(
     int is64
 );
 void* VaToPtr(uint64_t va, uint64_t imageBase, uint8_t* mappedBase, uint32_t sizeOfImage);
+
 int main(int argc,char **argv){
     if(argc != 2){
         printf("Usage : %s <Filename>\n", argv[0]);
@@ -452,7 +453,16 @@ int main(int argc,char **argv){
         runTLScallsbacks(imageMemory, common.TlsRVA, common, is64);
     }else{
         printf("\n[!] This PE Loader cannot run a 32 bits file\n");
+        goto cleanup;
     }
+
+    void(*EntryPoint)() = (void (*)())(imageMemory + common.AddressOfEntryPoint);
+
+    printf("\nRunning main...\n\n");
+
+    EntryPoint();
+
+    printf("\n [+] Programm returned from Entry Point.\n");
 
     status = 0;
     goto cleanup;
