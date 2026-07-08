@@ -456,7 +456,7 @@ int main(int argc,char **argv){
         goto cleanup;
     }
 
-    void(*EntryPoint)() = (void (*)())(imageMemory + common.AddressOfEntryPoint);
+    void(*EntryPoint)() = (void (*)())((uint8_t*)imageMemory + common.AddressOfEntryPoint);
 
     printf("\nRunning main...\n\n");
 
@@ -569,12 +569,12 @@ void relocation64(
             uint16_t type = raw >> 12;
             uint16_t offset = raw & 0x0FFF;
             
-            if(type == IMAGE_REL_BASED_DIR64){
+            if(type == IMAGE_REL_BASED_HIGHLOW){
                 uint32_t *patchAddr = (uint32_t*)(imageBase + block->VirtualAddress + offset);
+                *patchAddr += (uint32_t)delta;
 
-                *patchAddr += delta;
             }else if(type == IMAGE_REL_BASED_ABSOLUTE){
-            // ignore this case
+            // ignore
             }else{
                 unknownCount++;
             }
